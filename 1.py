@@ -11,24 +11,32 @@ import numpy as np
 
 logging.basicConfig(filename="log.log", encoding="utf-8", format="%(asctime)s - %(levelname)s : %(message)s", datefmt="%Y-%m-%d %H:%M:%S %p", level=10)
 
+def sort_contours(cnts, tolerance=20):
+    bounding_boxes = [cv2.boundingRect(c) for c in cnts]
+    cnts, bounding_boxes = zip(*sorted(zip(cnts, bounding_boxes), key=lambda b: (int(b[1][1] / tolerance) * tolerance, b[1][0])))
+    return cnts
+
 def sheet_slice(filename, cur, interval, MainWindow):
     image = cv2.imread(filename, -1)
     original = image.copy()
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 11, 2)
 
-    cnts = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    count = len(cnts[0])
+    cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filtered_cnts = [c for c in cnts if cv2.contourArea(c) > 500]
+    count = len(filtered_cnts)
     MainWindow.append_text("<font color='green'>开始处理 {}，需要切分成 {} 个单元</font>".format(filename, count))
     logging.info("开始处理 {}，需要切分成 {} 个单元".format(filename, count))
     if count > 0:
         ii = interval // count
 
-        # cv2.drawContours(original, cnts[0], -1, (0,.0, 255), 3, lineType=cv2.LINE_AA)
+        output = sort_contours(filtered_cnts)
+
+        cv2.drawContours(original, output, -1, (0,.0, 255), 3, lineType=cv2.LINE_AA)
 
         max_width = 0
         max_height = 0
-        for c in cnts[0]:
+        for c in output:
             x,y,w,h = cv2.boundingRect(c)
             if w > max_width:
                 max_width = w
@@ -42,7 +50,7 @@ def sheet_slice(filename, cur, interval, MainWindow):
             os.makedirs(extname[0])
             logging.info("创建文件夹 {}".format(extname[0]))
             sprite_number = 1
-            for c in cnts[0]:
+            for c in output:
                 x,y,w,h = cv2.boundingRect(c)
                 ROI = image[y:y+h, x:x+w]
                 bg = np.zeros((max_height, max_width, 4), np.uint8)
@@ -55,10 +63,11 @@ def sheet_slice(filename, cur, interval, MainWindow):
                 sprite_number += 1
                 cur = cur + ii
                 MainWindow.process_update(cur)
-                # cv2.imshow('thresh', thresh)
-                # cv2.imshow('contours', original)
-                # cv2.waitKey()
-                # cv2.destroyAllWindows()
+
+        cv2.imshow('thresh', thresh)
+        cv2.imshow('contours', original)
+        cv2.waitKey()
+        cv2.destroyAllWindows()
 
 class Ui_MainWindow(QtWidgets.QMainWindow):
 
