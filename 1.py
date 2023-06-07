@@ -7,33 +7,79 @@ import time
 import sys
 import logging
 import cv2
+import imageio.v2 as imageio
 import numpy as np
+import tkinter as tk
 
 logging.basicConfig(filename="log.log", encoding="utf-8", format="%(asctime)s - %(levelname)s : %(message)s", datefmt="%Y-%m-%d %H:%M:%S %p", level=10)
+
+def GetScreenCenter():
+    root = tk.Tk()
+    return root.winfo_screenwidth()//2,root.winfo_screenheight()//2
+
+def read_bgrimage(filename):
+    image = imageio.imread(filename)
+    return cv2.cvtColor(np.array(image[:,:,:3]), cv2.COLOR_RGB2BGR)
 
 def sort_contours(cnts, tolerance=20):
     bounding_boxes = [cv2.boundingRect(c) for c in cnts]
     cnts, bounding_boxes = zip(*sorted(zip(cnts, bounding_boxes), key=lambda b: (int(b[1][1] / tolerance) * tolerance, b[1][0])))
     return cnts
 
-def sheet_slice(filename, cur, interval, MainWindow):
-    image = cv2.imread(filename, -1)
+def open_debug(original, gray, thresh):
+    center_x, center_y = GetScreenCenter()
+    cv2.namedWindow('thresh', cv2.WINDOW_NORMAL)
+    cv2.imshow('thresh', thresh)
+    cv2.moveWindow('thresh', center_x, center_y)
+    cv2.namedWindow('contours', cv2.WINDOW_NORMAL)
+    cv2.imshow('contours', original)
+    cv2.moveWindow('contours', center_x, center_y)
+    cv2.namedWindow('gray', cv2.WINDOW_NORMAL)
+    cv2.imshow('gray', gray)
+    cv2.moveWindow('gray', center_x, center_y)
+    # cv2.namedWindow('close', cv2.WINDOW_NORMAL)
+    # cv2.imshow('close', close)
+    # cv2.moveWindow('close', center_x, center_y)
+    # cv2.namedWindow('dilate', cv2.WINDOW_NORMAL)
+    # cv2.imshow('dilate', dilate)
+    # cv2.moveWindow('dilate', center_x, center_y)
+    cv2.waitKey()
+    cv2.destroyAllWindows()
+
+def sheet_slice(filename, bar_cur, interval, MainWindow):
+    dirpath, ext = os.path.splitext(filename)
+    image = read_bgrimage(filename)
+
     original = image.copy()
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 11, 2)
 
-    cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    filtered_cnts = [c for c in cnts if cv2.contourArea(c) > 500]
+    gradX = cv2.Sobel(gray, ddepth=cv2.CV_32F, dx=1, dy=0, ksize=-1)
+    gradY = cv2.Sobel(gray, ddepth=cv2.CV_32F, dx=0, dy=1, ksize=-1)
+    gradient = cv2.subtract(gradX, gradY)
+    gradient = cv2.convertScaleAbs(gradient)
+
+    cv2.imshow('gradient', gradient)
+
+    # blurred = cv2.blur(gradient, (9, 9))
+
+    # thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 5, 2)
+    thresh = cv2.threshold(gradient, 0, 255, cv2.THRESH_BINARY)[1]
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3,3))
+    close = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
+    # close = cv2.erode(close, kernel, iterations=1)
+    # dilate = cv2.dilate(close, kernel, iterations=1)
+
+    cv2.imshow('close', close)
+
+    cnts, _ = cv2.findContours(close, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filtered_cnts = [c for c in cnts if cv2.contourArea(c) > 100]
     count = len(filtered_cnts)
     MainWindow.append_text("<font color='green'>开始处理 {}，需要切分成 {} 个单元</font>".format(filename, count))
     logging.info("开始处理 {}，需要切分成 {} 个单元".format(filename, count))
     if count > 0:
         ii = interval // count
-
         output = sort_contours(filtered_cnts)
-
-        cv2.drawContours(original, output, -1, (0,.0, 255), 3, lineType=cv2.LINE_AA)
-
         max_width = 0
         max_height = 0
         for c in output:
@@ -45,10 +91,10 @@ def sheet_slice(filename, cur, interval, MainWindow):
 
         MainWindow.append_text("导出精灵的统一尺寸：宽 {}，高 {}".format(max_width, max_height))
         logging.info("导出精灵的统一尺寸：宽 {}，高 {}".format(max_width, max_height))
-        extname = os.path.splitext(filename)
-        if not os.path.exists(extname[0]):
-            os.makedirs(extname[0])
-            logging.info("创建文件夹 {}".format(extname[0]))
+
+        if not os.path.exists(dirpath):
+            os.makedirs(dirpath)
+            logging.info("创建文件夹 {}".format(dirpath))
             sprite_number = 1
             for c in output:
                 x,y,w,h = cv2.boundingRect(c)
@@ -56,18 +102,19 @@ def sheet_slice(filename, cur, interval, MainWindow):
                 bg = np.zeros((max_height, max_width, 4), np.uint8)
                 x_offset = (max_width - w) // 2
                 y_offset = (max_height - h) // 2
-                bg[y_offset:y_offset+h, x_offset:x_offset+w, :4] = ROI
-                cv2.imwrite('{}/sprite_{}.png'.format(extname[0], sprite_number), bg)
+                bg[y_offset:y_offset+h, x_offset:x_offset+w, :3] = ROI
+                bg[y_offset:y_offset+h, x_offset:x_offset+w, 3] = (gray[y:y+h, x:x+w] > 0).astype(np.uint8) * 255
+                cv2.imwrite('{}/sprite_{}.png'.format(dirpath, sprite_number), bg)
                 MainWindow.append_text("导出第 {} 张精灵".format(sprite_number))
-                logging.info("导出第 {} 张精灵 {}/sprite_{}.png".format(sprite_number, extname[0], sprite_number))
+                logging.info("导出第 {} 张精灵 {}/sprite_{}.png".format(sprite_number, dirpath, sprite_number))
                 sprite_number += 1
-                cur = cur + ii
-                MainWindow.process_update(cur)
+                bar_cur = bar_cur + ii
+                MainWindow.process_update(bar_cur)
 
-        cv2.imshow('thresh', thresh)
-        cv2.imshow('contours', original)
-        cv2.waitKey()
-        cv2.destroyAllWindows()
+        cv2.drawContours(original, output, -1, (0,.0, 255), 3, lineType=cv2.LINE_AA)
+
+    open_debug(original, gray, thresh)
+
 
 class Ui_MainWindow(QtWidgets.QMainWindow):
 
@@ -116,7 +163,7 @@ class Ui_MainWindow(QtWidgets.QMainWindow):
     def openfile(self):
         if self.done == 1:
             self.done = 0
-            files, _ = QFileDialog.getOpenFileNames(self, '选择文件', '', 'Images (*.png , *.jpg, *.bpm, *.dib, *.jpeg, *.jpe, *.jp2, *.webp, *.tif, *.tiff)')
+            files, _ = QFileDialog.getOpenFileNames(self, '选择文件', '', 'Images (*.tga *.png *.jpg *.bpm *.dib *.jpeg *.jpe *.jp2 *.webp *.tif *.tiff)')
             p_num = len(files)
             logging.info("选择了文件 {}".format(files))
             if p_num > 0:
