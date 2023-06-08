@@ -19,10 +19,13 @@ def GetScreenCenter():
 
 def read_bgrimage(filename):
     image = imageio.imread(filename)
-    return cv2.cvtColor(np.array(image[:,:,:3]), cv2.COLOR_RGB2BGR)
+    # 不在考虑只读取 RGB 数据然后自己设置透明通道了，直接读取普通的透明通道最后赋值
+    # return cv2.cvtColor(np.array(image[:,:,:3]), cv2.COLOR_RGB2BGR)
+    return cv2.cvtColor(np.array(image), cv2.COLOR_RGBA2BGRA)
 
 def sort_contours(cnts, tolerance=20):
     bounding_boxes = [cv2.boundingRect(c) for c in cnts]
+    # 按照图片切片的 y 坐标从上到下排列，y 波动在 tolerance 之内都认为是一行，这样规避一行内切片上下不对齐的情况，然后按照 x 坐标从左到右
     cnts, bounding_boxes = zip(*sorted(zip(cnts, bounding_boxes), key=lambda b: (int(b[1][1] / tolerance) * tolerance, b[1][0])))
     return cnts
 
@@ -49,30 +52,44 @@ def open_debug(original, gray, thresh):
 def sheet_slice(filename, bar_cur, interval, MainWindow):
     dirpath, ext = os.path.splitext(filename)
     image = read_bgrimage(filename)
+    # 放弃 cv2.imread 直接读，不支持 tga，毕竟 tga 还是很常见的图片格式
+    # image = cv2.imread(filename, -1)
 
     original = image.copy()
+    # 把彩色图转灰度图
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
+    # 用 Sobel 算子计算 x，y 方向上的梯度，之后在 x 方向上减去 y 方向上的梯度，通过这个减法，留下具有高水平梯度和低垂直梯度的图像区域
     gradX = cv2.Sobel(gray, ddepth=cv2.CV_32F, dx=1, dy=0, ksize=-1)
     gradY = cv2.Sobel(gray, ddepth=cv2.CV_32F, dx=0, dy=1, ksize=-1)
     gradient = cv2.subtract(gradX, gradY)
     gradient = cv2.convertScaleAbs(gradient)
 
-    cv2.imshow('gradient', gradient)
+    # cv2.imshow('gradient', gradient)
 
+    # 使用低通滤波器平滑图像（9*9内核）降低图片的变化率，去掉平滑图像中的高频噪点，原理是将像素替换成周围 9*9 像素的均值
     # blurred = cv2.blur(gradient, (9, 9))
 
+    # 自适应阈值化操作主要用来根据亮度分布不通改变阈值，一般 sprite 图像亮度都统一的，所以用直接阈值化函数就好
     # thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 5, 2)
+    # 直接阈值化函数对图像进行二值化处理，THRESH_BINARY 含义是大于 0 的直接给 255 否则给 0
     thresh = cv2.threshold(gradient, 0, 255, cv2.THRESH_BINARY)[1]
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3,3))
-    close = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
+    # 形态学处理主要去除上面二值化图像中间还剩余的若干黑点，使得最后的识别边缘更加容易
+    # 根据我的实验，对于常见的 sprite 图像，其实形态学的意义不太大，如果需要可以增加
+    # cv2.MORPH_ELLIPSE 属于椭圆算子，还有矩形、十字型，感觉对于 sprite 主要可以用椭圆
+    # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    # morphologyEx 这个函数能够支持好几种处理，这里主要考虑腐蚀、膨胀、开运算、闭运算这四种
+    # close = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
+    # erode 其实就是单独的腐蚀函数，dilate 就是单独的膨胀函数
     # close = cv2.erode(close, kernel, iterations=1)
     # dilate = cv2.dilate(close, kernel, iterations=1)
 
-    cv2.imshow('close', close)
+    # cv2.imshow('close', close)
 
-    cnts, _ = cv2.findContours(close, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # findContours 搜索边缘，thresh 为二值化图像，RETR_EXTERNAL 表示只检测外边缘
+    cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 把检测到的外边缘做一下暴力检查，去掉面积太小的边缘，这些边缘基本说明找错了
     filtered_cnts = [c for c in cnts if cv2.contourArea(c) > 100]
     count = len(filtered_cnts)
     MainWindow.append_text("<font color='green'>开始处理 {}，需要切分成 {} 个单元</font>".format(filename, count))
@@ -100,10 +117,12 @@ def sheet_slice(filename, bar_cur, interval, MainWindow):
                 x,y,w,h = cv2.boundingRect(c)
                 ROI = image[y:y+h, x:x+w]
                 bg = np.zeros((max_height, max_width, 4), np.uint8)
+                # 输出图像统一大小
                 x_offset = (max_width - w) // 2
                 y_offset = (max_height - h) // 2
-                bg[y_offset:y_offset+h, x_offset:x_offset+w, :3] = ROI
-                bg[y_offset:y_offset+h, x_offset:x_offset+w, 3] = (gray[y:y+h, x:x+w] > 0).astype(np.uint8) * 255
+                bg[y_offset:y_offset+h, x_offset:x_offset+w, :4] = ROI
+                # 放弃自己赋值透明通道的做法
+                # bg[y_offset:y_offset+h, x_offset:x_offset+w, 3] = (gray[y:y+h, x:x+w] > 0).astype(np.uint8) * 255
                 cv2.imwrite('{}/sprite_{}.png'.format(dirpath, sprite_number), bg)
                 MainWindow.append_text("导出第 {} 张精灵".format(sprite_number))
                 logging.info("导出第 {} 张精灵 {}/sprite_{}.png".format(sprite_number, dirpath, sprite_number))
@@ -111,9 +130,9 @@ def sheet_slice(filename, bar_cur, interval, MainWindow):
                 bar_cur = bar_cur + ii
                 MainWindow.process_update(bar_cur)
 
-        cv2.drawContours(original, output, -1, (0,.0, 255), 3, lineType=cv2.LINE_AA)
+        # cv2.drawContours(original, output, -1, (0,.0, 255), 3, lineType=cv2.LINE_AA)
 
-    open_debug(original, gray, thresh)
+    # open_debug(original, gray, thresh)
 
 
 class Ui_MainWindow(QtWidgets.QMainWindow):
