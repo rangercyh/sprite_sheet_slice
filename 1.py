@@ -97,17 +97,18 @@ def sheet_slice(filename, bar_cur, interval, MainWindow):
     if count > 0:
         ii = interval // count
         output = sort_contours(filtered_cnts)
+
         max_width = 0
         max_height = 0
-        for c in output:
-            x,y,w,h = cv2.boundingRect(c)
-            if w > max_width:
-                max_width = w
-            if h > max_height:
-                max_height = h
-
-        MainWindow.append_text("导出精灵的统一尺寸：宽 {}，高 {}".format(max_width, max_height))
-        logging.info("导出精灵的统一尺寸：宽 {}，高 {}".format(max_width, max_height))
+        if MainWindow.rb.isChecked():
+            for c in output:
+                x,y,w,h = cv2.boundingRect(c)
+                if w > max_width:
+                    max_width = w
+                if h > max_height:
+                    max_height = h
+            MainWindow.append_text("导出精灵的统一尺寸：宽 {}，高 {}".format(max_width, max_height))
+            logging.info("导出精灵的统一尺寸：宽 {}，高 {}".format(max_width, max_height))
 
         if not os.path.exists(dirpath):
             os.makedirs(dirpath)
@@ -116,10 +117,14 @@ def sheet_slice(filename, bar_cur, interval, MainWindow):
             for c in output:
                 x,y,w,h = cv2.boundingRect(c)
                 ROI = image[y:y+h, x:x+w]
+
+                max_height = max_height if MainWindow.rb.isChecked() else h
+                max_width = max_width if MainWindow.rb.isChecked() else w
                 bg = np.zeros((max_height, max_width, 4), np.uint8)
                 # 输出图像统一大小
                 x_offset = (max_width - w) // 2
                 y_offset = (max_height - h) // 2
+
                 bg[y_offset:y_offset+h, x_offset:x_offset+w, :4] = ROI
                 # 放弃自己赋值透明通道的做法
                 # bg[y_offset:y_offset+h, x_offset:x_offset+w, 3] = (gray[y:y+h, x:x+w] > 0).astype(np.uint8) * 255
@@ -168,6 +173,11 @@ class Ui_MainWindow(QtWidgets.QMainWindow):
         self.browser = QTextBrowser(MainWindow)
         self.browser.setPlainText("")
         self.browser.setGeometry(QtCore.QRect(20, 80, 450, 200))
+
+        self.rb = QCheckBox(MainWindow)
+        self.rb.setText("导出相同尺寸切片")
+        self.rb.setChecked(True)
+        self.rb.setGeometry(340, 10, 120, 30)
 
     def append_text(self, text):
         self.browser.append(text)
