@@ -128,7 +128,8 @@ def sheet_slice(filename, bar_cur, interval, MainWindow):
                 bg[y_offset:y_offset+h, x_offset:x_offset+w, :4] = ROI
                 # 放弃自己赋值透明通道的做法
                 # bg[y_offset:y_offset+h, x_offset:x_offset+w, 3] = (gray[y:y+h, x:x+w] > 0).astype(np.uint8) * 255
-                cv2.imwrite('{}/sprite_{}.png'.format(dirpath, sprite_number), bg)
+                # cv2.imwrite('{}/sprite_{}.png'.format(dirpath, sprite_number), bg)
+                cv2.imencode('.png', bg)[1].tofile('{}/sprite_{}.png'.format(dirpath, sprite_number))
                 MainWindow.append_text("导出第 {} 张精灵".format(sprite_number))
                 logging.info("导出第 {} 张精灵 {}/sprite_{}.png".format(sprite_number, dirpath, sprite_number))
                 sprite_number += 1
